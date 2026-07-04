@@ -1,13 +1,13 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, PlusCircle, BarChart3, Settings } from "lucide-react";
+import { Home, PlusCircle, List, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TABS = [
   { href: "/home", icon: Home, label: "Home" },
   { href: "/add", icon: PlusCircle, label: "Add" },
-  { href: "/analytics", icon: BarChart3, label: "Analytics" },
+  { href: "/transactions", icon: List, label: "Transactions" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ] as const;
 

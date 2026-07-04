@@ -40,7 +40,7 @@ export default function SettingsPage() {
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [editAccountOpen, setEditAccountOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<FinanceAccount | null>(null);
-  const [accForm, setAccForm] = useState({ name: "", icon: "💳", currency: "EUR" as typeof CURRENCIES[number], balance: "0", isSavings: false });
+  const [accForm, setAccForm] = useState<{ name: string; icon: string; currency: string; balance: string; isSavings: boolean }>({ name: "", icon: "💳", currency: "EUR", balance: "0", isSavings: false });
 
   // Category form
   const [addCatOpen, setAddCatOpen] = useState(false);
