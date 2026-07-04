@@ -5,12 +5,10 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { FinanceAccount, FLTransaction, FLCategory } from "@/lib/types";
 import { getRates, toEurFromRates, formatMoney } from "@/lib/monobank";
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isToday, isYesterday } from "date-fns";
+import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Plus, ChevronRight } from "lucide-react";
 import { BottomSheet } from "@/components/layout/BottomSheet";
-
-type Period = "week" | "month" | "all";
 
 export default function HomePage() {
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
@@ -19,8 +17,6 @@ export default function HomePage() {
   const [rates, setRates] = useState<{ uahToEur: number; usdToEur: number }>({ uahToEur: 0.024, usdToEur: 0.92 });
   const [loading, setLoading] = useState(true);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const [period, setPeriod] = useState<Period>("week");
-  const [showAllCats, setShowAllCats] = useState(false);
   const [detailTx, setDetailTx] = useState<FLTransaction | null>(null);
   const router = useRouter();
   const supabase = createClient();
@@ -30,8 +26,14 @@ export default function HomePage() {
     if (!user) { router.push("/login"); return; }
 
     const [{ data: accs }, { data: txs }, { data: cats }, fetchedRates] = await Promise.all([
-      supabase.from("finance_accounts").select("*, account:finance_accounts(*)").eq("user_id", user.id).order("sort_order"),
-      supabase.from("fl_transactions").select("*, account:finance_accounts(*)").eq("user_id", user.id).order("date", { ascending: false }).order("created_at", { ascending: false }).limit(200),
+      supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
+      supabase
+        .from("fl_transactions")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(10),
       supabase.from("fl_categories").select("*").eq("user_id", user.id),
       getRates(),
     ]);
@@ -45,77 +47,16 @@ export default function HomePage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Compute display balance
-  const now = new Date();
+  const totalBalance = accounts
+    .filter(a => a.include_in_total)
+    .reduce((sum, a) => sum + toEurFromRates(a.current_balance, a.currency, rates), 0);
 
-  function getAccountBalanceEur(acc: FinanceAccount) {
-    return toEurFromRates(acc.current_balance, acc.currency, rates);
-  }
+  const selectedAccount = accounts.find(a => a.id === selectedAccountId) ?? null;
+  const displayBalance = selectedAccount
+    ? toEurFromRates(selectedAccount.current_balance, selectedAccount.currency, rates)
+    : totalBalance;
 
-  const totalEur = accounts
-    .filter((a) => a.include_in_total)
-    .reduce((sum, a) => sum + getAccountBalanceEur(a), 0);
-
-  const selectedAccount = accounts.find((a) => a.id === selectedAccountId) ?? null;
-  const displayBalanceEur = selectedAccount
-    ? getAccountBalanceEur(selectedAccount)
-    : totalEur;
-
-  // Period filter
-  function getPeriodDates(): { start: string; end: string } | null {
-    if (period === "week") {
-      return {
-        start: format(startOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"),
-        end: format(endOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"),
-      };
-    }
-    if (period === "month") {
-      return {
-        start: format(startOfMonth(now), "yyyy-MM-dd"),
-        end: format(endOfMonth(now), "yyyy-MM-dd"),
-      };
-    }
-    return null;
-  }
-
-  const periodDates = getPeriodDates();
-  const filteredTx = transactions.filter((t) => {
-    if (selectedAccountId && t.account_id !== selectedAccountId) return false;
-    if (periodDates) return t.date >= periodDates.start && t.date <= periodDates.end;
-    return true;
-  });
-
-  // Expenses by category (no transfers)
-  const expenseTx = filteredTx.filter((t) => !t.is_transfer && t.amount < 0);
-  const incomeTx = filteredTx.filter((t) => !t.is_transfer && t.amount > 0);
-  const transferTx = filteredTx.filter((t) => t.is_transfer);
-
-  const totalExpenseEur = expenseTx.reduce((s, t) => s + Math.abs(t.amount_eur ?? toEurFromRates(t.amount, t.currency, rates)), 0);
-  const totalIncomeEur = incomeTx.reduce((s, t) => s + (t.amount_eur ?? toEurFromRates(t.amount, t.currency, rates)), 0);
-  const totalTransferEur = transferTx.reduce((s, t) => s + Math.abs(t.amount_eur ?? toEurFromRates(t.amount, t.currency, rates)), 0);
-
-  // Group expenses by root category
-  const catMap = new Map<string, number>();
-  for (const tx of expenseTx) {
-    const catId = tx.category_id ?? "__none__";
-    catMap.set(catId, (catMap.get(catId) ?? 0) + Math.abs(t_eur(tx)));
-  }
-
-  function t_eur(tx: FLTransaction) {
-    return tx.amount_eur ?? toEurFromRates(tx.amount, tx.currency, rates);
-  }
-
-  const catBreakdown = Array.from(catMap.entries())
-    .map(([catId, total]) => ({
-      cat: allCategories.find((c) => c.id === catId) ?? null,
-      total,
-    }))
-    .sort((a, b) => b.total - a.total);
-
-  const visibleCats = showAllCats ? catBreakdown : catBreakdown.slice(0, 5);
-
-  // Recent transactions (last 5)
-  const recentTx = transactions.filter((t) => !selectedAccountId || t.account_id === selectedAccountId).slice(0, 5);
+  const recentTx = transactions.filter(t => !selectedAccountId || t.account_id === selectedAccountId);
 
   function formatDateLabel(dateStr: string) {
     const d = new Date(dateStr + "T00:00:00");
@@ -132,9 +73,11 @@ export default function HomePage() {
     );
   }
 
-  const detailCat = detailTx ? allCategories.find((c) => c.id === detailTx.category_id) ?? null : null;
-  const detailSubcat = detailTx ? allCategories.find((c) => c.id === detailTx.subcategory_id) ?? null : null;
-  const detailAcc = detailTx ? (detailTx.account as FinanceAccount | null) ?? accounts.find((a) => a.id === detailTx.account_id) ?? null : null;
+  const detailCat = detailTx ? allCategories.find(c => c.id === detailTx.category_id) ?? null : null;
+  const detailSubcat = detailTx ? allCategories.find(c => c.id === detailTx.subcategory_id) ?? null : null;
+  const detailAcc = detailTx ? accounts.find(a => a.id === detailTx.account_id) ?? null : null;
+
+  const now = new Date();
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] pt-safe pb-24">
@@ -154,7 +97,7 @@ export default function HomePage() {
         >
           All accounts
         </button>
-        {accounts.map((acc) => (
+        {accounts.map(acc => (
           <button
             key={acc.id}
             onClick={() => setSelectedAccountId(acc.id)}
@@ -177,79 +120,15 @@ export default function HomePage() {
       {/* Balance card */}
       <div className="mx-4 mb-4 bg-[#111111] rounded-2xl p-5 text-center">
         <p className="text-[#6b7280] text-xs mb-1">
-          {selectedAccount ? selectedAccount.name : "Total balance"}
+          {selectedAccountId ? accounts.find(a => a.id === selectedAccountId)?.name : 'Total balance'}
         </p>
-        <p className="text-white font-black text-4xl">€{displayBalanceEur.toFixed(2)}</p>
-        {selectedAccount && selectedAccount.currency !== "EUR" && (
-          <p className="text-[#6b7280] text-sm mt-1">
-            {formatMoney(selectedAccount.current_balance, selectedAccount.currency)}
-          </p>
-        )}
-      </div>
-
-      {/* Period filter */}
-      <div className="flex gap-2 px-4 mb-4">
-        {(["week", "month", "all"] as Period[]).map((p) => (
-          <button
-            key={p}
-            onClick={() => setPeriod(p)}
-            className={cn("px-4 py-2 rounded-xl text-sm font-semibold transition-all",
-              period === p ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
-            )}
-          >
-            {p === "week" ? "This week" : p === "month" ? "This month" : "All time"}
-          </button>
-        ))}
-      </div>
-
-      {/* Expenses by category */}
-      <div className="px-4 mb-4">
-        <div className="bg-[#111111] rounded-2xl overflow-hidden">
-          {/* Income + Transfer summary */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
-            <span className="text-[#6b7280] text-xs">Expenses by category</span>
-            <span className="text-white text-xs font-bold">−€{totalExpenseEur.toFixed(2)}</span>
-          </div>
-
-          {totalIncomeEur > 0 && (
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5">
-              <div className="w-10 h-10 rounded-xl bg-[#1a1a1a] flex items-center justify-center text-xl shrink-0">💰</div>
-              <p className="flex-1 text-[#00FF85] text-sm font-medium">Income</p>
-              <p className="text-[#00FF85] text-sm font-bold">+€{totalIncomeEur.toFixed(2)}</p>
-            </div>
-          )}
-          {totalTransferEur > 0 && (
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5">
-              <div className="w-10 h-10 rounded-xl bg-[#1a1a1a] flex items-center justify-center text-xl shrink-0">↔️</div>
-              <p className="flex-1 text-[#6b7280] text-sm font-medium">Transfers</p>
-              <p className="text-[#6b7280] text-sm font-bold">€{totalTransferEur.toFixed(2)}</p>
-            </div>
-          )}
-
-          {catBreakdown.length === 0 ? (
-            <p className="text-[#6b7280] text-sm text-center py-8">No expenses for this period</p>
-          ) : (
-            <>
-              {visibleCats.map(({ cat, total }) => (
-                <div key={cat?.id ?? "__none__"} className="flex items-center gap-3 px-4 py-3 border-b border-white/5 last:border-0">
-                  <div className="w-10 h-10 rounded-xl bg-[#1a1a1a] flex items-center justify-center text-xl shrink-0">
-                    {cat?.icon ?? "💸"}
-                  </div>
-                  <p className="flex-1 text-white text-sm font-medium">{cat?.name ?? "No category"}</p>
-                  <p className="text-white text-sm font-bold">−€{total.toFixed(2)}</p>
-                </div>
-              ))}
-              {catBreakdown.length > 5 && !showAllCats && (
-                <button
-                  onClick={() => setShowAllCats(true)}
-                  className="w-full py-3 text-[#6b7280] text-sm text-center"
-                >
-                  Show all ({catBreakdown.length - 5} more)
-                </button>
-              )}
-            </>
-          )}
-        </div>
+        <p className="text-white font-black text-4xl">€{displayBalance.toFixed(2)}</p>
+        {selectedAccountId && (() => {
+          const acc = accounts.find(a => a.id === selectedAccountId);
+          return acc && acc.currency !== 'EUR' ? (
+            <p className="text-[#6b7280] text-sm mt-1">{formatMoney(acc.current_balance, acc.currency)}</p>
+          ) : null;
+        })()}
       </div>
 
       {/* Recent transactions */}
@@ -267,10 +146,10 @@ export default function HomePage() {
           {recentTx.length === 0 ? (
             <p className="text-[#6b7280] text-sm text-center py-8">No transactions yet</p>
           ) : (
-            recentTx.map((tx) => {
-              const cat = allCategories.find((c) => c.id === tx.category_id) ?? null;
-              const sub = allCategories.find((c) => c.id === tx.subcategory_id) ?? null;
-              const acc = (tx.account as FinanceAccount | null) ?? accounts.find((a) => a.id === tx.account_id) ?? null;
+            recentTx.map(tx => {
+              const cat = allCategories.find(c => c.id === tx.category_id) ?? null;
+              const sub = allCategories.find(c => c.id === tx.subcategory_id) ?? null;
+              const acc = accounts.find(a => a.id === tx.account_id) ?? null;
               return (
                 <button
                   key={tx.id}

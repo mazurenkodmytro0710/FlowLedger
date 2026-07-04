@@ -106,6 +106,14 @@ export default function SettingsPage() {
     showToast("Account deleted");
   }
 
+  async function toggleIncludeInTotal(acc: FinanceAccount) {
+    await supabase
+      .from("finance_accounts")
+      .update({ include_in_total: !acc.include_in_total })
+      .eq("id", acc.id);
+    await load();
+  }
+
   async function addCategory() {
     if (!catForm.name.trim()) return;
     await supabase.from("fl_categories").insert({
@@ -177,22 +185,27 @@ export default function SettingsPage() {
         {/* ACCOUNTS */}
         {activeTab === "accounts" && (
           <div className="space-y-3">
-            {accounts.map((acc) => (
-              <div key={acc.id} className="bg-[#111111] rounded-2xl p-4 flex items-center justify-between">
+            {accounts.map(acc => (
+              <div key={acc.id} className="flex items-center justify-between bg-[#111] rounded-2xl px-4 py-3">
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">{acc.icon}</span>
                   <div>
-                    <p className="text-white font-semibold text-sm">{acc.name}</p>
+                    <p className="text-white font-medium text-sm">{acc.name}</p>
                     <p className="text-[#6b7280] text-xs">{acc.currency} · {acc.current_balance.toFixed(2)}{acc.is_savings ? " · savings" : ""}</p>
                   </div>
                 </div>
-                <div className="flex gap-1">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => toggleIncludeInTotal(acc)} title="Include in total balance">
+                    <div className={cn("w-11 h-6 rounded-full transition-all relative", acc.include_in_total ? "bg-[#00FF85]" : "bg-[#333]")}>
+                      <div className={cn("absolute top-0.5 w-5 h-5 bg-white rounded-full transition-all", acc.include_in_total ? "right-0.5" : "left-0.5")} />
+                    </div>
+                  </button>
                   <button onClick={() => {
                     setEditingAccount(acc);
                     setAccForm({ name: acc.name, icon: acc.icon, currency: acc.currency, balance: String(acc.current_balance), isSavings: acc.is_savings });
                     setEditAccountOpen(true);
-                  }} className="p-2 text-[#6b7280] active:text-[#00FF85]"><Pencil size={15} /></button>
-                  <button onClick={() => deleteAccount(acc.id)} className="p-2 text-[#6b7280] active:text-[#ef4444]"><Trash2 size={15} /></button>
+                  }} className="p-2 text-[#6b7280]"><Pencil size={15} /></button>
+                  <button onClick={() => deleteAccount(acc.id)} className="p-2 text-[#6b7280]"><Trash2 size={15} /></button>
                 </div>
               </div>
             ))}

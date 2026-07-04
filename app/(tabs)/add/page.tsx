@@ -7,34 +7,35 @@ import type { FinanceAccount, FLCategory } from "@/lib/types";
 import { getRates, toEurFromRates } from "@/lib/monobank";
 import { showToast } from "@/components/ui/Toaster";
 import { BottomSheet } from "@/components/layout/BottomSheet";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Plus, X } from "lucide-react";
-import { format } from "date-fns";
 
 type TxType = "expense" | "income" | "transfer";
-type Currency = "EUR" | "UAH" | "USD";
 
 export default function AddPage() {
   const [txType, setTxType] = useState<TxType>("expense");
   const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState<Currency>("EUR");
-  const [eurPreview, setEurPreview] = useState<number | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [toAccountId, setToAccountId] = useState("");
   const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
   const [selectedSubcat, setSelectedSubcat] = useState<FLCategory | null>(null);
   const [subSearch, setSubSearch] = useState("");
-  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [note, setNote] = useState("");
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
   const [allCategories, setAllCategories] = useState<FLCategory[]>([]);
   const [userId, setUserId] = useState("");
   const [saving, setSaving] = useState(false);
-  const [catSheetOpen, setCatSheetOpen] = useState(false);
+  const [rates, setRates] = useState({ uahToEur: 0.024, usdToEur: 0.92 });
+
+  // New category sheet state
+  const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCatName, setNewCatName] = useState("");
+  const [newCatIcon, setNewCatIcon] = useState("");
   const [newCatType, setNewCatType] = useState<"expense" | "income">("expense");
-  const [newCatEmoji, setNewCatEmoji] = useState("📦");
   const [creatingCat, setCreatingCat] = useState(false);
+
   const router = useRouter();
   const supabase = createClient();
 
@@ -42,12 +43,14 @@ export default function AddPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { router.push("/login"); return; }
     setUserId(user.id);
-    const [{ data: accs }, { data: cats }] = await Promise.all([
+    const [{ data: accs }, { data: cats }, fetchedRates] = await Promise.all([
       supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
       supabase.from("fl_categories").select("*").eq("user_id", user.id).order("sort_order"),
+      getRates(),
     ]);
     setAccounts(accs ?? []);
     setAllCategories(cats ?? []);
+    setRates(fetchedRates);
     if (accs?.length) {
       setSelectedAccountId(accs[0].id);
       setToAccountId(accs[1]?.id ?? accs[0].id);
@@ -56,22 +59,13 @@ export default function AddPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // EUR preview
-  useEffect(() => {
-    if (currency === "EUR" || !amount) { setEurPreview(null); return; }
-    const parsed = parseFloat(amount.replace(",", "."));
-    if (isNaN(parsed)) { setEurPreview(null); return; }
-    getRates().then((r) => {
-      setEurPreview(toEurFromRates(parsed, currency, r));
-    });
-  }, [amount, currency]);
+  // Currency derived from selected account
+  const currency = accounts.find(a => a.id === selectedAccountId)?.currency ?? "EUR";
 
-  const filteredRootCats = allCategories.filter((c) => c.type === txType && !c.parent_id);
-  const visibleCats = filteredRootCats.slice(0, 7);
-  const hiddenCatsCount = filteredRootCats.length - 7;
+  const filteredCategories = allCategories.filter(c => c.type === txType && !c.parent_id);
 
   const matchingSubs = selectedCatId
-    ? allCategories.filter((c) => c.parent_id === selectedCatId && c.name.toLowerCase().includes(subSearch.toLowerCase()))
+    ? allCategories.filter(c => c.parent_id === selectedCatId && c.name.toLowerCase().includes(subSearch.toLowerCase()))
     : [];
 
   async function createAndSelectSubcat(name: string) {
@@ -86,33 +80,34 @@ export default function AddPage() {
       sort_order: 0,
     }).select().single();
     if (data) {
-      setAllCategories((prev) => [...prev, data as FLCategory]);
+      setAllCategories(prev => [...prev, data as FLCategory]);
       setSelectedSubcat(data as FLCategory);
       setSubSearch("");
     }
   }
 
   async function createCategory() {
-    if (!newCatName.trim() || !userId) return;
+    if (!newCatName.trim() || !newCatIcon.trim() || !userId) return;
     setCreatingCat(true);
     const { data } = await supabase.from("fl_categories").insert({
       user_id: userId,
       name: newCatName.trim(),
-      icon: newCatEmoji,
+      icon: newCatIcon.trim(),
       type: newCatType,
       color: "#6b7280",
       parent_id: null,
       sort_order: allCategories.length,
     }).select().single();
     if (data) {
-      setAllCategories((prev) => [...prev, data as FLCategory]);
+      setAllCategories(prev => [...prev, data as FLCategory]);
       setSelectedCatId(data.id);
       setSelectedSubcat(null);
       setSubSearch("");
     }
     setNewCatName("");
+    setNewCatIcon("");
     setCreatingCat(false);
-    setCatSheetOpen(false);
+    setShowAddCategory(false);
     showToast("Category created ✓");
   }
 
@@ -132,8 +127,8 @@ export default function AddPage() {
     }
 
     setSaving(true);
-    const rates = await getRates();
-    const { uahToEur, usdToEur } = rates;
+    const freshRates = await getRates();
+    const { uahToEur, usdToEur } = freshRates;
 
     let amountEur = parsedAmount;
     if (currency === "UAH") amountEur = parsedAmount * uahToEur;
@@ -142,6 +137,8 @@ export default function AddPage() {
     const sign = txType === "expense" ? -1 : 1;
     const signedAmount = txType === "transfer" ? -parsedAmount : sign * parsedAmount;
     const signedEur = txType === "transfer" ? -amountEur : sign * amountEur;
+
+    const date = new Date().toISOString().split("T")[0];
 
     await supabase.from("fl_transactions").insert({
       user_id: userId,
@@ -154,10 +151,11 @@ export default function AddPage() {
       description: note || null,
       date,
       is_transfer: txType === "transfer",
+      source: "manual",
     });
 
     // Update account balance
-    const acc = accounts.find((a) => a.id === selectedAccountId);
+    const acc = accounts.find(a => a.id === selectedAccountId);
     if (acc) {
       await supabase.from("finance_accounts").update({
         current_balance: Math.round((acc.current_balance + signedAmount) * 100) / 100,
@@ -166,7 +164,7 @@ export default function AddPage() {
 
     // If transfer, also add income to target account
     if (txType === "transfer" && toAccountId && toAccountId !== selectedAccountId) {
-      const toAcc = accounts.find((a) => a.id === toAccountId);
+      const toAcc = accounts.find(a => a.id === toAccountId);
       await supabase.from("fl_transactions").insert({
         user_id: userId,
         account_id: toAccountId,
@@ -178,6 +176,7 @@ export default function AddPage() {
         description: note || null,
         date,
         is_transfer: true,
+        source: "manual",
       });
       if (toAcc) {
         await supabase.from("finance_accounts").update({
@@ -209,33 +208,23 @@ export default function AddPage() {
 
       {/* Amount input */}
       <div className="mx-4 mb-4 bg-[#111111] rounded-2xl p-5">
-        <div className="flex items-center justify-center gap-3 mb-2">
+        <div className="flex items-center justify-center gap-3">
           <input
             type="text"
             inputMode="decimal"
             value={amount}
-            onChange={(e) => setAmount(e.target.value.replace(",", "."))}
+            onChange={e => setAmount(e.target.value.replace(",", "."))}
             placeholder="0.00"
             autoFocus
-            className="text-center bg-transparent text-white outline-none flex-1"
-            style={{ fontSize: "48px", fontWeight: 900 }}
+            className="text-center bg-transparent text-white outline-none"
+            style={{ fontSize: "48px", fontWeight: 900, width: "200px" }}
           />
-          <div className="flex flex-col gap-1">
-            {(["EUR", "UAH", "USD"] as Currency[]).map((c) => (
-              <button
-                key={c}
-                onClick={() => setCurrency(c)}
-                className={cn("px-2 py-1 rounded-lg text-xs font-bold transition-all",
-                  currency === c ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
-                )}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
+          <span className="text-[#6b7280] text-lg font-semibold">{currency}</span>
         </div>
-        {eurPreview !== null && (
-          <p className="text-[#6b7280] text-sm text-center">≈ €{eurPreview.toFixed(2)}</p>
+        {currency === "UAH" && amount && !isNaN(parseFloat(amount)) && (
+          <p className="text-[#6b7280] text-xs text-center mt-1">
+            ≈ €{(parseFloat(amount) * rates.uahToEur).toFixed(2)}
+          </p>
         )}
       </div>
 
@@ -273,7 +262,7 @@ export default function AddPage() {
           {txType === "transfer" ? "From account" : "Account"}
         </p>
         <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-          {accounts.map((a) => (
+          {accounts.map(a => (
             <button
               key={a.id}
               onClick={() => setSelectedAccountId(a.id)}
@@ -292,7 +281,7 @@ export default function AddPage() {
         <div className="mx-4 mb-4">
           <p className="text-[#6b7280] text-xs mb-2">To account</p>
           <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-            {accounts.map((a) => (
+            {accounts.map(a => (
               <button
                 key={a.id}
                 onClick={() => setToAccountId(a.id)}
@@ -307,12 +296,12 @@ export default function AddPage() {
         </div>
       )}
 
-      {/* Category selector */}
+      {/* Category grid — only for non-transfer */}
       {txType !== "transfer" && (
         <div className="mx-4 mb-4">
           <p className="text-[#6b7280] text-xs mb-2">Category</p>
-          <div className="flex flex-wrap gap-2">
-            {visibleCats.map((cat) => (
+          <div className="grid grid-cols-4 gap-2">
+            {filteredCategories.map(cat => (
               <button
                 key={cat.id}
                 onClick={() => {
@@ -320,23 +309,29 @@ export default function AddPage() {
                   setSelectedSubcat(null);
                   setSubSearch("");
                 }}
-                className={cn("flex flex-col items-center gap-1 py-2.5 px-3 rounded-xl border min-w-[72px] transition-all",
-                  selectedCatId === cat.id ? "border-[#00FF85] bg-[#00FF85]/10 text-[#00FF85]" : "border-white/10 text-[#6b7280]"
+                className={cn(
+                  "flex flex-col items-center justify-center gap-1.5 rounded-2xl border aspect-square transition-all",
+                  selectedCatId === cat.id
+                    ? "border-[#00FF85] bg-[#00FF85]/10"
+                    : "border-white/10 bg-[#1a1a1a]"
                 )}
               >
-                <span className="text-xl">{cat.icon}</span>
-                <span className="text-[10px] text-center leading-tight">{cat.name}</span>
+                <span className="text-2xl">{cat.icon}</span>
+                <span className="text-[10px] text-[#6b7280] text-center leading-tight px-1 line-clamp-2">
+                  {cat.name}
+                </span>
               </button>
             ))}
-            {hiddenCatsCount > 0 && (
-              <button
-                onClick={() => setCatSheetOpen(true)}
-                className="flex flex-col items-center gap-1 py-2.5 px-3 rounded-xl border border-white/10 min-w-[72px] text-[#6b7280]"
-              >
-                <span className="text-xl">+{hiddenCatsCount}</span>
-                <span className="text-[10px] text-center leading-tight">more</span>
-              </button>
-            )}
+            <button
+              onClick={() => {
+                setNewCatType(txType === "income" ? "income" : "expense");
+                setShowAddCategory(true);
+              }}
+              className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-white/20 bg-transparent aspect-square"
+            >
+              <Plus size={22} className="text-[#6b7280]" />
+              <span className="text-[10px] text-[#6b7280]">New</span>
+            </button>
           </div>
         </div>
       )}
@@ -347,14 +342,14 @@ export default function AddPage() {
           <p className="text-[#6b7280] text-xs mb-2">Subcategory</p>
           <input
             value={subSearch}
-            onChange={(e) => setSubSearch(e.target.value)}
+            onChange={e => setSubSearch(e.target.value)}
             placeholder="Search or create subcategory..."
             className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none"
             style={{ fontSize: "16px" }}
           />
           {subSearch.length > 0 && (
             <div className="mt-2 bg-[#111] rounded-xl overflow-hidden">
-              {matchingSubs.map((s) => (
+              {matchingSubs.map(s => (
                 <button
                   key={s.id}
                   onClick={() => { setSelectedSubcat(s); setSubSearch(""); }}
@@ -363,7 +358,7 @@ export default function AddPage() {
                   {s.name}
                 </button>
               ))}
-              {subSearch.trim() && !matchingSubs.find((s) => s.name.toLowerCase() === subSearch.toLowerCase()) && (
+              {subSearch.trim() && !matchingSubs.find(s => s.name.toLowerCase() === subSearch.toLowerCase()) && (
                 <button
                   onClick={() => createAndSelectSubcat(subSearch.trim())}
                   className="w-full px-4 py-3 text-left text-[#00FF85] text-sm flex items-center gap-2"
@@ -386,20 +381,11 @@ export default function AddPage() {
         </div>
       )}
 
-      {/* Date + Note */}
-      <div className="mx-4 mb-4 space-y-2">
-        <div className="flex items-center gap-2 bg-[#111111] rounded-xl px-4 py-3">
-          <span className="text-[#6b7280] text-xs">Date:</span>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="bg-transparent text-white text-sm outline-none"
-          />
-        </div>
+      {/* Note */}
+      <div className="mx-4 mb-4">
         <input
           value={note}
-          onChange={(e) => setNote(e.target.value)}
+          onChange={e => setNote(e.target.value)}
           placeholder="Note (optional)"
           className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none"
           style={{ fontSize: "16px" }}
@@ -417,68 +403,41 @@ export default function AddPage() {
         </button>
       </div>
 
-      {/* Full category sheet */}
-      <BottomSheet open={catSheetOpen} onClose={() => setCatSheetOpen(false)} title="All categories">
-        <div className="pb-6">
-          {/* Create new category form */}
-          <div className="mb-4 bg-[#1a1a1a] rounded-2xl p-4 space-y-3">
-            <p className="text-[#6b7280] text-xs font-semibold uppercase tracking-wider">New category</p>
-            <input
-              value={newCatName}
-              onChange={(e) => setNewCatName(e.target.value)}
-              placeholder="Name"
-              className="w-full bg-[#111] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none"
-              style={{ fontSize: "16px" }}
-            />
-            <div className="flex gap-2">
-              {(["expense", "income"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setNewCatType(t)}
-                  className={cn("flex-1 py-2 rounded-xl text-xs font-semibold transition-all",
-                    newCatType === t ? "bg-[#00FF85] text-black" : "bg-[#111] text-[#6b7280]"
-                  )}
-                >
-                  {t === "expense" ? "Expense" : "Income"}
-                </button>
-              ))}
-            </div>
-            <input
-              value={newCatEmoji}
-              onChange={(e) => setNewCatEmoji(e.target.value)}
-              placeholder="Pick emoji 👆"
-              className="w-full bg-[#111] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none"
-              style={{ fontSize: "16px" }}
-            />
-            <button
-              onClick={createCategory}
-              disabled={!newCatName.trim() || creatingCat}
-              className="w-full py-3 bg-[#00FF85] text-black font-bold rounded-xl text-sm disabled:opacity-40"
-            >
-              Create
-            </button>
-          </div>
-
-          {/* All categories grid */}
-          <div className="flex flex-wrap gap-2">
-            {allCategories.filter((c) => c.type === txType && !c.parent_id).map((cat) => (
+      {/* New Category bottom sheet */}
+      <BottomSheet open={showAddCategory} onClose={() => setShowAddCategory(false)} title="New Category">
+        <div className="space-y-4 pb-6">
+          <Input
+            value={newCatName}
+            onChange={e => setNewCatName(e.target.value)}
+            placeholder="Category name"
+            className="bg-[#1a1a1a] border-white/10 text-white h-12"
+          />
+          <Input
+            value={newCatIcon}
+            onChange={e => setNewCatIcon(e.target.value)}
+            placeholder="Pick emoji 👆"
+            className="bg-[#1a1a1a] border-white/10 text-white h-12 text-2xl"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            {(["expense", "income"] as const).map(t => (
               <button
-                key={cat.id}
-                onClick={() => {
-                  setSelectedCatId(cat.id);
-                  setSelectedSubcat(null);
-                  setSubSearch("");
-                  setCatSheetOpen(false);
-                }}
-                className={cn("flex flex-col items-center gap-1 py-2.5 px-3 rounded-xl border min-w-[72px] transition-all",
-                  selectedCatId === cat.id ? "border-[#00FF85] bg-[#00FF85]/10 text-[#00FF85]" : "border-white/10 text-[#6b7280]"
+                key={t}
+                onClick={() => setNewCatType(t)}
+                className={cn("py-2.5 rounded-xl text-sm font-semibold",
+                  newCatType === t ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
                 )}
               >
-                <span className="text-xl">{cat.icon}</span>
-                <span className="text-[10px] text-center leading-tight">{cat.name}</span>
+                {t === "expense" ? "Expense" : "Income"}
               </button>
             ))}
           </div>
+          <Button
+            onClick={createCategory}
+            disabled={!newCatName.trim() || !newCatIcon.trim() || creatingCat}
+            className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl"
+          >
+            Create
+          </Button>
         </div>
       </BottomSheet>
     </div>

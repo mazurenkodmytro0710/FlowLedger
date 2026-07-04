@@ -36,6 +36,7 @@ export interface FLTransaction {
   date: string
   is_transfer: boolean
   receipt_photo_url: string | null
+  source: string | null
   created_at: string
   // joined
   account?: FinanceAccount | null

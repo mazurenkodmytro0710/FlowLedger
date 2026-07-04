@@ -6,13 +6,15 @@ import { createClient } from "@/lib/supabase/client";
 import type { FinanceAccount, FLTransaction, FLCategory } from "@/lib/types";
 import { formatMoney } from "@/lib/monobank";
 import { BottomSheet } from "@/components/layout/BottomSheet";
+import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/Toaster";
 import { cn } from "@/lib/utils";
-import { format, isToday, isYesterday } from "date-fns";
-import { Trash2, Pencil, X } from "lucide-react";
-import { Plus } from "lucide-react";
+import { format, isToday, isYesterday, startOfWeek, startOfMonth } from "date-fns";
+import { Trash2, Pencil, X, SlidersHorizontal, Plus } from "lucide-react";
 
 type FilterType = "all" | "expense" | "income" | "transfer";
+type FilterSort = "newest" | "oldest" | "largest" | "smallest";
+type FilterPeriod = "all" | "month" | "week";
 
 const PAGE_SIZE = 50;
 
@@ -21,10 +23,15 @@ export default function TransactionsPage() {
   const [allCategories, setAllCategories] = useState<FLCategory[]>([]);
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterType, setFilterType] = useState<FilterType>("all");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [userId, setUserId] = useState("");
+
+  // Filter state
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterType, setFilterType] = useState<FilterType>("all");
+  const [filterSort, setFilterSort] = useState<FilterSort>("newest");
+  const [filterPeriod, setFilterPeriod] = useState<FilterPeriod>("all");
 
   // Detail sheet
   const [detailTx, setDetailTx] = useState<FLTransaction | null>(null);
@@ -59,25 +66,49 @@ export default function TransactionsPage() {
 
     let q = supabase
       .from("fl_transactions")
-      .select("*, account:finance_accounts(*)", { count: "exact" })
+      .select("*", { count: "exact" })
       .eq("user_id", user.id)
       .order("date", { ascending: false })
       .order("created_at", { ascending: false })
       .range(0, currentPage * PAGE_SIZE - 1);
 
-    if (filterType === "expense") q = q.lt("amount", 0).eq("is_transfer", false);
-    if (filterType === "income") q = q.gt("amount", 0).eq("is_transfer", false);
-    if (filterType === "transfer") q = q.eq("is_transfer", true);
-
     const { data: txs, count } = await q;
     setTransactions(txs ?? []);
     setTotal(count ?? 0);
     setLoading(false);
-  }, [supabase, router, page, filterType]);
+  }, [supabase, router, page]);
 
-  useEffect(() => { load(true); }, [filterType]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (!loading) load(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(true); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!loading) load(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Client-side filtering
+  function applyFilters(txs: FLTransaction[]): FLTransaction[] {
+    let result = [...txs];
+
+    // Type filter
+    if (filterType === "expense") result = result.filter(t => t.amount < 0 && !t.is_transfer);
+    else if (filterType === "income") result = result.filter(t => t.amount > 0 && !t.is_transfer);
+    else if (filterType === "transfer") result = result.filter(t => t.is_transfer);
+
+    // Period filter
+    if (filterPeriod === "week") {
+      const start = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
+      result = result.filter(t => t.date >= start);
+    } else if (filterPeriod === "month") {
+      const start = format(startOfMonth(new Date()), "yyyy-MM-dd");
+      result = result.filter(t => t.date >= start);
+    }
+
+    // Sort
+    if (filterSort === "newest") result.sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at));
+    else if (filterSort === "oldest") result.sort((a, b) => a.date.localeCompare(b.date) || a.created_at.localeCompare(b.created_at));
+    else if (filterSort === "largest") result.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    else if (filterSort === "smallest") result.sort((a, b) => Math.abs(a.amount) - Math.abs(b.amount));
+
+    return result;
+  }
+
+  const filteredTransactions = applyFilters(transactions);
 
   function formatDateHeader(dateStr: string) {
     const d = new Date(dateStr + "T00:00:00");
@@ -86,21 +117,27 @@ export default function TransactionsPage() {
     return format(d, "d MMM yyyy");
   }
 
-  // Group by date
+  // Group by date (only when sorting by date)
   const grouped: { date: string; txs: FLTransaction[] }[] = [];
-  for (const tx of transactions) {
-    const last = grouped[grouped.length - 1];
-    if (last && last.date === tx.date) {
-      last.txs.push(tx);
-    } else {
-      grouped.push({ date: tx.date, txs: [tx] });
+  if (filterSort === "newest" || filterSort === "oldest") {
+    for (const tx of filteredTransactions) {
+      const last = grouped[grouped.length - 1];
+      if (last && last.date === tx.date) {
+        last.txs.push(tx);
+      } else {
+        grouped.push({ date: tx.date, txs: [tx] });
+      }
+    }
+  } else {
+    // Put all in single flat group when sorted by amount
+    if (filteredTransactions.length > 0) {
+      grouped.push({ date: "", txs: filteredTransactions });
     }
   }
 
   async function deleteTx(tx: FLTransaction) {
     if (!confirm("Delete this transaction?")) return;
-    // Reverse balance
-    const acc = accounts.find((a) => a.id === tx.account_id);
+    const acc = accounts.find(a => a.id === tx.account_id);
     if (acc) {
       await supabase.from("finance_accounts").update({
         current_balance: Math.round((acc.current_balance - tx.amount) * 100) / 100,
@@ -133,8 +170,7 @@ export default function TransactionsPage() {
     const newAmount = sign * parsedAmount;
     const delta = newAmount - editTx.amount;
 
-    // Update balance
-    const acc = accounts.find((a) => a.id === editTx.account_id);
+    const acc = accounts.find(a => a.id === editTx.account_id);
     if (acc) {
       await supabase.from("finance_accounts").update({
         current_balance: Math.round((acc.current_balance + delta) * 100) / 100,
@@ -156,7 +192,7 @@ export default function TransactionsPage() {
   }
 
   const editMatchingSubs = editCatId
-    ? allCategories.filter((c) => c.parent_id === editCatId && c.name.toLowerCase().includes(editSubSearch.toLowerCase()))
+    ? allCategories.filter(c => c.parent_id === editCatId && c.name.toLowerCase().includes(editSubSearch.toLowerCase()))
     : [];
 
   if (loading) {
@@ -167,30 +203,30 @@ export default function TransactionsPage() {
     );
   }
 
+  // Count active filters
+  const activeFilterCount = [
+    filterType !== "all",
+    filterSort !== "newest",
+    filterPeriod !== "all",
+  ].filter(Boolean).length;
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] pt-safe pb-24">
       {/* Header */}
       <header className="px-4 pt-4 pb-3 sticky top-0 bg-[#0a0a0a] z-10">
-        <h1 className="text-2xl font-black text-white mb-3">Transactions</h1>
-
-        {/* Filter pills */}
-        <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-          {([
-            { id: "all", label: "All" },
-            { id: "expense", label: "Expenses" },
-            { id: "income", label: "Income" },
-            { id: "transfer", label: "Transfers" },
-          ] as { id: FilterType; label: string }[]).map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setFilterType(f.id)}
-              className={cn("shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all",
-                filterType === f.id ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-black text-white">Transactions</h1>
+          <button
+            onClick={() => setShowFilters(true)}
+            className="relative w-10 h-10 bg-[#1a1a1a] rounded-xl flex items-center justify-center"
+          >
+            <SlidersHorizontal size={18} className="text-white" />
+            {activeFilterCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-[#00FF85] rounded-full text-black text-[9px] font-black flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -199,15 +235,17 @@ export default function TransactionsPage() {
         {grouped.length === 0 ? (
           <p className="text-[#6b7280] text-sm text-center py-12">No transactions</p>
         ) : (
-          grouped.map(({ date, txs }) => (
-            <div key={date}>
-              <p className="px-4 py-2 text-[#6b7280] text-xs font-semibold uppercase tracking-wider bg-[#0a0a0a] sticky top-[96px]">
-                {formatDateHeader(date)}
-              </p>
-              {txs.map((tx) => {
-                const cat = allCategories.find((c) => c.id === tx.category_id) ?? null;
-                const sub = allCategories.find((c) => c.id === tx.subcategory_id) ?? null;
-                const acc = (tx.account as FinanceAccount | null) ?? accounts.find((a) => a.id === tx.account_id) ?? null;
+          grouped.map(({ date, txs }, gi) => (
+            <div key={date || gi}>
+              {date && (
+                <p className="px-4 py-2 text-[#6b7280] text-xs font-semibold uppercase tracking-wider bg-[#0a0a0a] sticky top-[64px]">
+                  {formatDateHeader(date)}
+                </p>
+              )}
+              {txs.map(tx => {
+                const cat = allCategories.find(c => c.id === tx.category_id) ?? null;
+                const sub = allCategories.find(c => c.id === tx.subcategory_id) ?? null;
+                const acc = accounts.find(a => a.id === tx.account_id) ?? null;
                 return (
                   <button
                     key={tx.id}
@@ -243,7 +281,7 @@ export default function TransactionsPage() {
         {/* Load more */}
         {transactions.length < total && (
           <button
-            onClick={() => setPage((p) => p + 1)}
+            onClick={() => setPage(p => p + 1)}
             className="w-full py-4 text-[#6b7280] text-sm text-center"
           >
             Load more ({total - transactions.length} remaining)
@@ -251,12 +289,63 @@ export default function TransactionsPage() {
         )}
       </div>
 
-      {/* Detail/Edit sheet */}
+      {/* Filter bottom sheet */}
+      <BottomSheet open={showFilters} onClose={() => setShowFilters(false)} title="Filter">
+        <div className="space-y-5 pb-8">
+          {/* Type */}
+          <div>
+            <p className="text-[#6b7280] text-xs mb-2">Type</p>
+            <div className="flex gap-2 flex-wrap">
+              {(["all", "expense", "income", "transfer"] as const).map(t => (
+                <button key={t} onClick={() => setFilterType(t)}
+                  className={cn("px-4 py-2 rounded-xl text-sm font-medium capitalize transition-all",
+                    filterType === t ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
+                  )}>
+                  {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Sort */}
+          <div>
+            <p className="text-[#6b7280] text-xs mb-2">Sort</p>
+            <div className="flex gap-2 flex-wrap">
+              {(["newest", "oldest", "largest", "smallest"] as const).map(s => (
+                <button key={s} onClick={() => setFilterSort(s)}
+                  className={cn("px-4 py-2 rounded-xl text-sm font-medium capitalize transition-all",
+                    filterSort === s ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
+                  )}>
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Period */}
+          <div>
+            <p className="text-[#6b7280] text-xs mb-2">Period</p>
+            <div className="flex gap-2 flex-wrap">
+              {(["all", "month", "week"] as const).map(p => (
+                <button key={p} onClick={() => setFilterPeriod(p)}
+                  className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
+                    filterPeriod === p ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
+                  )}>
+                  {p === "all" ? "All time" : p === "month" ? "This month" : "This week"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Button onClick={() => setShowFilters(false)} className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
+            Apply
+          </Button>
+        </div>
+      </BottomSheet>
+
+      {/* Detail sheet */}
       <BottomSheet open={!!detailTx} onClose={() => setDetailTx(null)} title="Transaction">
         {detailTx && (() => {
-          const cat = allCategories.find((c) => c.id === detailTx.category_id) ?? null;
-          const sub = allCategories.find((c) => c.id === detailTx.subcategory_id) ?? null;
-          const acc = (detailTx.account as FinanceAccount | null) ?? accounts.find((a) => a.id === detailTx.account_id) ?? null;
+          const cat = allCategories.find(c => c.id === detailTx.category_id) ?? null;
+          const sub = allCategories.find(c => c.id === detailTx.subcategory_id) ?? null;
+          const acc = accounts.find(a => a.id === detailTx.account_id) ?? null;
           return (
             <div className="pb-6 space-y-4">
               <div className="flex items-center gap-3">
@@ -323,24 +412,22 @@ export default function TransactionsPage() {
       <BottomSheet open={!!editTx} onClose={() => setEditTx(null)} title="Edit Transaction">
         {editTx && (
           <div className="pb-6 space-y-4">
-            {/* Amount */}
             <div>
               <p className="text-[#6b7280] text-xs mb-1">Amount ({editTx.currency})</p>
               <input
                 type="text"
                 inputMode="decimal"
                 value={editAmount}
-                onChange={(e) => setEditAmount(e.target.value.replace(",", "."))}
+                onChange={e => setEditAmount(e.target.value.replace(",", "."))}
                 className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white text-xl font-bold outline-none"
               />
             </div>
 
-            {/* Category (not for transfers) */}
             {!editTx.is_transfer && (
               <div>
                 <p className="text-[#6b7280] text-xs mb-2">Category</p>
                 <div className="flex flex-wrap gap-2">
-                  {allCategories.filter((c) => !c.parent_id && c.type === (editTx.amount < 0 ? "expense" : "income")).map((cat) => (
+                  {allCategories.filter(c => !c.parent_id && c.type === (editTx.amount < 0 ? "expense" : "income")).map(cat => (
                     <button
                       key={cat.id}
                       onClick={() => { setEditCatId(cat.id); setEditSubcatId(null); setEditSubSearch(""); }}
@@ -356,20 +443,19 @@ export default function TransactionsPage() {
               </div>
             )}
 
-            {/* Subcategory */}
             {!editTx.is_transfer && editCatId && (
               <div>
                 <p className="text-[#6b7280] text-xs mb-2">Subcategory</p>
                 <input
                   value={editSubSearch}
-                  onChange={(e) => setEditSubSearch(e.target.value)}
+                  onChange={e => setEditSubSearch(e.target.value)}
                   placeholder="Search subcategory..."
                   className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none"
                   style={{ fontSize: "16px" }}
                 />
                 {editSubSearch.length > 0 && (
                   <div className="mt-2 bg-[#111] rounded-xl overflow-hidden">
-                    {editMatchingSubs.map((s) => (
+                    {editMatchingSubs.map(s => (
                       <button
                         key={s.id}
                         onClick={() => { setEditSubcatId(s.id); setEditSubSearch(""); }}
@@ -378,7 +464,7 @@ export default function TransactionsPage() {
                         {s.name}
                       </button>
                     ))}
-                    {editSubSearch.trim() && !editMatchingSubs.find((s) => s.name.toLowerCase() === editSubSearch.toLowerCase()) && (
+                    {editSubSearch.trim() && !editMatchingSubs.find(s => s.name.toLowerCase() === editSubSearch.toLowerCase()) && (
                       <button
                         onClick={async () => {
                           if (!editCatId || !userId) return;
@@ -392,7 +478,7 @@ export default function TransactionsPage() {
                             sort_order: 0,
                           }).select().single();
                           if (data) {
-                            setAllCategories((prev) => [...prev, data as FLCategory]);
+                            setAllCategories(prev => [...prev, data as FLCategory]);
                             setEditSubcatId(data.id);
                             setEditSubSearch("");
                           }
@@ -405,7 +491,7 @@ export default function TransactionsPage() {
                   </div>
                 )}
                 {editSubcatId && (() => {
-                  const sub = allCategories.find((c) => c.id === editSubcatId);
+                  const sub = allCategories.find(c => c.id === editSubcatId);
                   return sub ? (
                     <div className="mt-2 flex items-center gap-2">
                       <span className="px-3 py-1.5 bg-[#00FF85]/10 border border-[#00FF85] rounded-xl text-[#00FF85] text-xs">
@@ -420,23 +506,21 @@ export default function TransactionsPage() {
               </div>
             )}
 
-            {/* Date */}
             <div>
               <p className="text-[#6b7280] text-xs mb-1">Date</p>
               <input
                 type="date"
                 value={editDate}
-                onChange={(e) => setEditDate(e.target.value)}
+                onChange={e => setEditDate(e.target.value)}
                 className="bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none w-full"
               />
             </div>
 
-            {/* Note */}
             <div>
               <p className="text-[#6b7280] text-xs mb-1">Note</p>
               <input
                 value={editNote}
-                onChange={(e) => setEditNote(e.target.value)}
+                onChange={e => setEditNote(e.target.value)}
                 placeholder="Note (optional)"
                 className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white text-sm outline-none"
                 style={{ fontSize: "16px" }}
