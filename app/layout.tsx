@@ -11,11 +11,14 @@ const geist = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "FlowLedger — Finance Tracker",
+  title: "FlowLedger",
   description: "Personal finance tracker",
   manifest: "/manifest.json",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "FlowLedger" },
-  icons: { apple: "/icon-192.png" },
+  icons: {
+    icon: ["/icon-192.png", "/icon-512.png"],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
@@ -30,6 +33,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`dark ${geist.variable}`}>
+      <head>
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <meta name="apple-mobile-web-app-title" content="FlowLedger" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
       <body className="font-sans antialiased bg-[#0a0a0a] text-white overflow-x-hidden">
         <ServiceWorkerRegistration />
         <Toaster />
