@@ -1,0 +1,107 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-tabbar {
+    padding-bottom: calc(49px + env(safe-area-inset-bottom, 0px));
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .overscroll-contain {
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+  }
+}
+
+@layer base {
+  :root {
+    --background: oklch(0.05 0 0);
+    --foreground: oklch(1 0 0);
+    --card: oklch(0.09 0 0);
+    --card-foreground: oklch(1 0 0);
+    --popover: oklch(0.12 0 0);
+    --popover-foreground: oklch(1 0 0);
+    --primary: oklch(0.88 0.22 152);
+    --primary-foreground: oklch(0 0 0);
+    --secondary: oklch(0.14 0 0);
+    --secondary-foreground: oklch(1 0 0);
+    --muted: oklch(0.14 0 0);
+    --muted-foreground: oklch(0.52 0.01 248);
+    --accent: oklch(0.88 0.22 152);
+    --accent-foreground: oklch(0 0 0);
+    --destructive: oklch(0.62 0.22 25);
+    --destructive-foreground: oklch(1 0 0);
+    --border: oklch(0.18 0 0);
+    --input: oklch(0.18 0 0);
+    --ring: oklch(0.88 0.22 152);
+    --radius: 0.75rem;
+  }
+  .dark {
+    --background: oklch(0.05 0 0);
+    --foreground: oklch(1 0 0);
+    --card: oklch(0.09 0 0);
+    --card-foreground: oklch(1 0 0);
+    --popover: oklch(0.12 0 0);
+    --popover-foreground: oklch(1 0 0);
+    --primary: oklch(0.88 0.22 152);
+    --primary-foreground: oklch(0 0 0);
+    --secondary: oklch(0.14 0 0);
+    --secondary-foreground: oklch(1 0 0);
+    --muted: oklch(0.14 0 0);
+    --muted-foreground: oklch(0.52 0.01 248);
+    --accent: oklch(0.88 0.22 152);
+    --accent-foreground: oklch(0 0 0);
+    --destructive: oklch(0.62 0.22 25);
+    --destructive-foreground: oklch(1 0 0);
+    --border: oklch(0.18 0 0);
+    --input: oklch(0.18 0 0);
+    --ring: oklch(0.88 0.22 152);
+  }
+  *, *::before, *::after {
+    box-sizing: border-box;
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    overflow-x: hidden;
+    width: 100%;
+  }
+  html {
+    @apply font-sans;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    overflow-x: hidden;
+  }
+}
+
+/* iOS: prevent zoom on input focus */
+input, textarea, select {
+  font-size: 16px !important;
+}
+
+/* Bottom sheet iOS scroll/drag fix */
+[data-slot="sheet-overlay"] {
+  touch-action: none;
+}
+[data-slot="sheet-content"] {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
