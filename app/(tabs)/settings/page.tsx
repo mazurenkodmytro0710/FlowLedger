@@ -326,32 +326,44 @@ export default function SettingsPage() {
   }
 
   async function exportJSON() {
-    const [accs, cats, txs] = await Promise.all([
-      supabase.from("finance_accounts").select("*").eq("user_id", userId),
+    const [
+      { data: txs },
+      { data: cats },
+      { data: accs },
+    ] = await Promise.all([
+      supabase.from("fl_transactions").select("*").eq("user_id", userId).order("date", { ascending: true }),
       supabase.from("fl_categories").select("*").eq("user_id", userId),
-      supabase.from("fl_transactions").select("*").eq("user_id", userId),
+      supabase.from("finance_accounts").select("*").eq("user_id", userId),
     ]);
 
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          {
-            accounts: accs.data,
-            categories: cats.data,
-            transactions: txs.data,
-            exportedAt: new Date().toISOString(),
-          },
-          null,
-          2
-        ),
-      ],
-      { type: "application/json" }
-    );
+    const catMap = new Map((cats ?? []).map((c) => [c.id, c]));
+    const accMap = new Map((accs ?? []).map((a) => [a.id, a]));
 
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `flowledger-export-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
+    const flat = (txs ?? []).map((t) => {
+      const cat = catMap.get(t.category_id ?? "");
+      const subcat = catMap.get(t.subcategory_id ?? "");
+      const acc = accMap.get(t.account_id);
+      return {
+        date: t.date,
+        amount: t.amount,
+        amount_eur: t.amount_eur,
+        currency: t.currency,
+        type: t.is_transfer ? "transfer" : t.amount < 0 ? "expense" : "income",
+        category: cat?.name ?? null,
+        subcategory: subcat?.name ?? null,
+        account: acc?.name ?? null,
+        description: t.description ?? null,
+        source: t.source ?? null,
+        created_at: t.created_at?.slice(0, 10) ?? null,
+      };
+    });
+
+    const blob = new Blob([JSON.stringify(flat, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `flowledger_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    showToast("Exported ✓");
   }
 
   const rootCategories = categories.filter((category) => category.type === categoryType && !category.parent_id);
