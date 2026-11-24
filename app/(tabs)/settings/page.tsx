@@ -325,13 +325,34 @@ export default function SettingsPage() {
     showToast("Deleted");
   }
 
+  // PostgREST віддає максимум 1000 рядків за запит, тому читаємо сторінками
+  async function fetchAllTransactions() {
+    const PAGE = 1000;
+    const all: any[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("fl_transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      all.push(...(data ?? []));
+      if (!data || data.length < PAGE) break;
+    }
+    return all;
+  }
+
   async function exportJSON() {
-    const [
-      { data: txs },
-      { data: cats },
-      { data: accs },
-    ] = await Promise.all([
-      supabase.from("fl_transactions").select("*").eq("user_id", userId).order("date", { ascending: true }),
+    let txs: any[];
+    try {
+      txs = await fetchAllTransactions();
+    } catch {
+      showToast("Export failed", "error");
+      return;
+    }
+    const [{ data: cats }, { data: accs }] = await Promise.all([
       supabase.from("fl_categories").select("*").eq("user_id", userId),
       supabase.from("finance_accounts").select("*").eq("user_id", userId),
     ]);
